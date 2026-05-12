@@ -731,7 +731,7 @@ function showTab(id) {
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   document.getElementById('tab-'+id).classList.add('active');
   document.getElementById('tab-content-'+id).classList.add('active');
-  if (id==='planner') { updatePlannerBadge(); loadFromJsonBin(currentDate); }
+  if (id==='planner') { updatePlannerBadge(); if (GITHUB_TOKEN) loadFromJsonBin(currentDate); else renderPlanner(); }
   if (id==='weekly') renderWeekly();
   if (id==='time') renderTime();
   if (id==='travel') renderTravel();
@@ -937,7 +937,7 @@ function loadDay() {
   document.getElementById('header-date').textContent = fmtDate(d);
   checkRollover();
   renderPlanner();
-  if (GITHUB_TOKEN) loadFromJsonBin(d);
+  // No network call here - Gist is loaded once at startup and on tab focus
 }
 
 function updatePlannerBadge() {
@@ -1575,19 +1575,12 @@ async function pushToGist(d, arr) {
 var loadRequestId = 0;
 
 async function loadFromJsonBin(d) {
-  // Increment request ID — any older requests that complete will be ignored
   var thisRequest = ++loadRequestId;
-
-  // Show local data immediately
-  renderPlanner();
-
-  if (!GITHUB_TOKEN) { setSyncStatus('', 'Not synced'); return; }
+  if (!GITHUB_TOKEN) { setSyncStatus('', 'Not synced'); renderPlanner(); return; }
   setSyncStatus('pulse', 'Syncing\u2026');
-
   try {
     var gistId = getGistId();
     var headers = { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3+json' };
-
     if (!gistId) {
       var listRes = await fetch(GIST_API + '?per_page=100', { headers: headers });
       if (listRes.ok) {
@@ -1599,24 +1592,22 @@ async function loadFromJsonBin(d) {
         }
       }
     }
-
+    if (thisRequest !== loadRequestId) return;
     if (gistId) {
       var res = await fetch(GIST_API + '/' + gistId, { headers: headers });
-      // Ignore if a newer request has started
       if (thisRequest !== loadRequestId) return;
       if (res.ok) {
         var gistData = await res.json();
-        try {
-          var allDays = JSON.parse(gistData.files['bulldogs-planner.json'].content);
-          gistCache = allDays;
-          Object.keys(allDays).forEach(function(day) { saveLocal(day, allDays[day]); });
-          setSyncStatus('on', 'Synced');
-          // Only re-render if this is still the current day being viewed
-          if (thisRequest === loadRequestId) renderPlanner();
-        } catch(e) { setSyncStatus('on', 'Ready'); }
-      } else { setSyncStatus('err', 'Load error ' + res.status); }
+        var allDays = JSON.parse(gistData.files['bulldogs-planner.json'].content);
+        // Load ALL days into local storage at once
+        gistCache = allDays;
+        Object.keys(allDays).forEach(function(day) { saveLocal(day, allDays[day]); });
+        setSyncStatus('on', 'Synced');
+      } else { setSyncStatus('err', 'Error ' + res.status); }
     } else { setSyncStatus('on', 'Ready'); }
   } catch(err) { setSyncStatus('err', 'Offline'); }
+  // Always re-render after sync completes
+  if (thisRequest === loadRequestId) renderPlanner();
 }
 
 function saveGhToken() {
@@ -1700,27 +1691,21 @@ document.getElementById('comms-date').value = todayStr();
 updatePlannerBadge();
 setSyncStatus('on', 'Sync active');
 initSyncUI();
-loadDay();
+// Load all days from Gist into local storage, then show today
+if (GITHUB_TOKEN) {
+  loadFromJsonBin(currentDate).then(function() { loadDay(); });
+} else {
+  loadDay();
+}
 
-// Auto-refresh when returning to the app (e.g. switching back on phone)
+// Auto-refresh when returning to the app
 document.addEventListener('visibilitychange', function() {
-  if (!document.hidden && GITHUB_TOKEN) {
-    loadFromJsonBin(currentDate);
-  }
+  if (!document.hidden && GITHUB_TOKEN) loadFromJsonBin(currentDate);
 });
 
-// Background poll every 30 seconds to stay in sync
+// Background poll every 30 seconds
 setInterval(function() {
-  if (GITHUB_TOKEN && !document.hidden) {
-    // Also update currentDate in case day has rolled over
-    var today = todayStr();
-    if (today !== currentDate && currentDate === todayStr()) {
-      currentDate = today;
-      loadDay();
-    } else {
-      loadFromJsonBin(currentDate);
-    }
-  }
+  if (GITHUB_TOKEN && !document.hidden) loadFromJsonBin(currentDate);
 }, 30000);
 </script>
 </body>
