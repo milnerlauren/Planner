@@ -1508,34 +1508,44 @@ function schedulePush(d, arr) {
 }
 
 async function pushToJsonBin(d, arr) {
-  setSyncStatus('pulse', 'Syncing…');
+  setSyncStatus('pulse', 'Syncing\u2026');
   try {
-    var binId = getBinId(d);
-    var body = JSON.stringify({ date: d, tasks: arr });
-    var headers = {
-      'Content-Type': 'application/json',
-      'X-Master-Key': JSONBIN_KEY,
-      'X-Bin-Name': 'bulldogs-' + d
-    };
-    var res, data;
-    if (binId) {
-      res = await fetch(JSONBIN_BASE + '/' + binId, {
-        method: 'PUT',
-        headers: headers,
-        body: body
-      });
-    } else {
-      res = await fetch(JSONBIN_BASE, {
+    var masterBinId = ls('jsonbin_master_id');
+    var headers = { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY };
+
+    if (!masterBinId) {
+      // Create master bin on first use
+      var res = await fetch(JSONBIN_BASE, {
         method: 'POST',
         headers: headers,
-        body: body
+        body: JSON.stringify({ version: 1, days: {} })
       });
-      if (res.ok) {
-        data = await res.json();
-        setBinId(d, data.metadata.id);
-      }
+      if (!res.ok) { setSyncStatus('err', 'Sync error'); return; }
+      var json = await res.json();
+      masterBinId = json.metadata.id;
+      lss('jsonbin_master_id', masterBinId);
     }
-    if (res.ok) {
+
+    // Read current master bin
+    var getRes = await fetch(JSONBIN_BASE + '/' + masterBinId + '/latest', { headers: { 'X-Master-Key': JSONBIN_KEY } });
+    var current = { version: 1, days: {} };
+    if (getRes.ok) {
+      var j = await getRes.json();
+      current = j.record || current;
+    }
+
+    // Update just this day
+    if (!current.days) current.days = {};
+    current.days[d] = arr;
+
+    // Write back
+    var putRes = await fetch(JSONBIN_BASE + '/' + masterBinId, {
+      method: 'PUT',
+      headers: headers,
+      body: JSON.stringify(current)
+    });
+
+    if (putRes.ok) {
       setSyncStatus('on', 'Synced');
     } else {
       setSyncStatus('err', 'Sync error');
@@ -1546,34 +1556,33 @@ async function pushToJsonBin(d, arr) {
 }
 
 async function loadFromJsonBin(d) {
-  setSyncStatus('pulse', 'Loading…');
+  setSyncStatus('pulse', 'Loading\u2026');
   try {
-    var headers = { 'X-Master-Key': JSONBIN_KEY };
-    // Search bins by name
-    var searchRes = await fetch('https://api.jsonbin.io/v3/b?binName=bulldogs-' + d, { headers: headers });
-    if (searchRes.ok) {
-      var bins = await searchRes.json();
-      if (bins && bins.length > 0) {
-        var binId = bins[0].record;
-        setBinId(d, binId);
-        var dataRes = await fetch(JSONBIN_BASE + '/' + binId + '/latest', { headers: headers });
-        if (dataRes.ok) {
-          var json = await dataRes.json();
-          var arr = json.record.tasks || [];
-          saveLocal(d, arr);
-          setSyncStatus('on', 'Synced');
-          renderPlanner();
-          return;
-        }
-      }
+    var masterBinId = ls('jsonbin_master_id');
+    if (!masterBinId) {
+      setSyncStatus('on', 'Ready');
+      renderPlanner();
+      return;
     }
-    // No bin found - use local
-    setSyncStatus('on', 'Ready');
-    renderPlanner();
+    var res = await fetch(JSONBIN_BASE + '/' + masterBinId + '/latest', {
+      headers: { 'X-Master-Key': JSONBIN_KEY }
+    });
+    if (res.ok) {
+      var json = await res.json();
+      var days = (json.record && json.record.days) ? json.record.days : {};
+      // Sync all days we have locally too
+      Object.keys(days).forEach(function(day) {
+        saveLocal(day, days[day]);
+      });
+      // Store master bin id on this device if not set
+      setSyncStatus('on', 'Synced');
+    } else {
+      setSyncStatus('err', 'Could not load');
+    }
   } catch(err) {
     setSyncStatus('err', 'Offline');
-    renderPlanner();
   }
+  renderPlanner();
 }
 
 function saveSync() {}
