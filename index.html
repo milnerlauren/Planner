@@ -609,10 +609,22 @@ textarea { resize: none; line-height: 1.5; }
   <div class="tab-content" id="tab-content-sync">
     <div class="card">
       <div class="section-head">Cross-device sync</div>
-      <div style="background:#e8f5e9;border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;color:#2e7d32;margin-bottom:12px">
-        Sync is active — your tasks appear on any device automatically. No setup needed.
+      <div id="sync-setup-panel">
+        <p style="font-size:13px;color:var(--text2);margin-bottom:12px;line-height:1.6">Paste your GitHub Personal Access Token below to enable sync across your phone and laptop. You only need to do this once on each device.</p>
+        <div class="row" style="margin-bottom:8px">
+          <input type="password" id="gh-token-input" class="grow" placeholder="Paste your GitHub token (ghp_...)" />
+          <button class="btn btn-primary" onclick="saveGhToken()">Connect</button>
+        </div>
+        <p style="font-size:12px;color:var(--text3);line-height:1.6">Your token is stored only in this browser and never uploaded anywhere except GitHub's own servers.</p>
       </div>
-      <p style="font-size:13px;color:var(--text2);line-height:1.6">Open the planner from the same URL on your phone and laptop and your tasks will always be in sync.</p>
+      <div id="sync-connected-panel" style="display:none">
+        <div style="background:#e8f5e9;border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;color:#2e7d32;margin-bottom:12px">
+          <svg class="ico" viewBox="0 0 24 24" style="vertical-align:-3px;margin-right:4px"><path d="M5 12l5 5L20 7"/></svg>
+          Connected — syncing across all devices automatically.
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="disconnectGhToken()">Disconnect</button>
+      </div>
+    </div>
 
     <div class="card">
       <div class="section-head">Data export</div>
@@ -1485,8 +1497,8 @@ function renderStaff() {
 // ═══════════════════════════════════════════════
 //  SYNC
 // ═══════════════════════════════════════════════
-const JSONBIN_KEY = '$2a$10$ewY02DeE/xY0ZyZluR1Xf.3N7Pcs/iKiiEuxIPG1hIVRwkdxbrrFS';
-const JSONBIN_BASE = 'https://api.jsonbin.io/v3/b';
+var GITHUB_TOKEN = ls('bulldogs_gh_token') || '';
+const GIST_API = 'https://api.github.com/gists';
 
 function setSyncStatus(state, text) {
   const dot = document.getElementById('sync-dot');
@@ -1495,96 +1507,106 @@ function setSyncStatus(state, text) {
   if (lbl && text) lbl.textContent = text;
 }
 
-function getBinId(d) {
-  return ls('jsonbin_id_' + d);
-}
-function setBinId(d, id) {
-  lss('jsonbin_id_' + d, id);
-}
+function getGistId() { return ls('bulldogs_gist_id'); }
+function setGistId(id) { lss('bulldogs_gist_id', id); }
 
 function schedulePush(d, arr) {
   clearTimeout(syncT);
-  syncT = setTimeout(function() { pushToJsonBin(d, arr); }, 800);
+  syncT = setTimeout(function() { pushToGist(d, arr); }, 800);
 }
 
-async function pushToJsonBin(d, arr) {
-  setSyncStatus('pulse', 'Syncing\u2026');
+async function pushToGist(d, arr) {
+  setSyncStatus('pulse', 'Syncing…');
   try {
-    var masterBinId = ls('jsonbin_master_id');
-    var headers = { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_KEY };
-
-    if (!masterBinId) {
-      // Create master bin on first use
-      var res = await fetch(JSONBIN_BASE, {
-        method: 'POST',
-        headers: headers,
-        body: JSON.stringify({ version: 1, days: {} })
-      });
-      if (!res.ok) { setSyncStatus('err', 'Sync error'); return; }
-      var json = await res.json();
-      masterBinId = json.metadata.id;
-      lss('jsonbin_master_id', masterBinId);
+    var gistId = getGistId();
+    var headers = {
+      'Content-Type': 'application/json',
+      'Authorization': 'token ' + GITHUB_TOKEN,
+      'Accept': 'application/vnd.github.v3+json'
+    };
+    var current = {};
+    if (gistId) {
+      var getRes = await fetch(GIST_API + '/' + gistId, { headers: headers });
+      if (getRes.ok) {
+        var gistData = await getRes.json();
+        try { current = JSON.parse(gistData.files['bulldogs-planner.json'].content); } catch(e) {}
+      }
     }
-
-    // Read current master bin
-    var getRes = await fetch(JSONBIN_BASE + '/' + masterBinId + '/latest', { headers: { 'X-Master-Key': JSONBIN_KEY } });
-    var current = { version: 1, days: {} };
-    if (getRes.ok) {
-      var j = await getRes.json();
-      current = j.record || current;
-    }
-
-    // Update just this day
-    if (!current.days) current.days = {};
-    current.days[d] = arr;
-
-    // Write back
-    var putRes = await fetch(JSONBIN_BASE + '/' + masterBinId, {
-      method: 'PUT',
-      headers: headers,
-      body: JSON.stringify(current)
-    });
-
-    if (putRes.ok) {
-      setSyncStatus('on', 'Synced');
+    current[d] = arr;
+    var body = {
+      description: 'Bulldogs Planner Data',
+      public: false,
+      files: { 'bulldogs-planner.json': { content: JSON.stringify(current) } }
+    };
+    var res;
+    if (gistId) {
+      res = await fetch(GIST_API + '/' + gistId, { method: 'PATCH', headers: headers, body: JSON.stringify(body) });
     } else {
-      setSyncStatus('err', 'Sync error');
+      res = await fetch(GIST_API, { method: 'POST', headers: headers, body: JSON.stringify(body) });
+      if (res.ok) { var j = await res.json(); setGistId(j.id); }
     }
-  } catch(err) {
-    setSyncStatus('err', 'Offline');
-  }
+    setSyncStatus(res.ok ? 'on' : 'err', res.ok ? 'Synced' : 'Sync error');
+  } catch(err) { setSyncStatus('err', 'Offline'); }
 }
 
 async function loadFromJsonBin(d) {
-  setSyncStatus('pulse', 'Loading\u2026');
+  setSyncStatus('pulse', 'Loading…');
   try {
-    var masterBinId = ls('jsonbin_master_id');
-    if (!masterBinId) {
-      setSyncStatus('on', 'Ready');
-      renderPlanner();
-      return;
+    var gistId = getGistId();
+    var headers = { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3+json' };
+    if (!gistId) {
+      var listRes = await fetch(GIST_API + '?per_page=100', { headers: headers });
+      if (listRes.ok) {
+        var gists = await listRes.json();
+        for (var i = 0; i < gists.length; i++) {
+          if (gists[i].files && gists[i].files['bulldogs-planner.json']) {
+            gistId = gists[i].id; setGistId(gistId); break;
+          }
+        }
+      }
     }
-    var res = await fetch(JSONBIN_BASE + '/' + masterBinId + '/latest', {
-      headers: { 'X-Master-Key': JSONBIN_KEY }
-    });
-    if (res.ok) {
-      var json = await res.json();
-      var days = (json.record && json.record.days) ? json.record.days : {};
-      // Sync all days we have locally too
-      Object.keys(days).forEach(function(day) {
-        saveLocal(day, days[day]);
-      });
-      // Store master bin id on this device if not set
-      setSyncStatus('on', 'Synced');
-    } else {
-      setSyncStatus('err', 'Could not load');
-    }
-  } catch(err) {
-    setSyncStatus('err', 'Offline');
-  }
+    if (gistId) {
+      var res = await fetch(GIST_API + '/' + gistId, { headers: headers });
+      if (res.ok) {
+        var gistData = await res.json();
+        try {
+          var allDays = JSON.parse(gistData.files['bulldogs-planner.json'].content);
+          Object.keys(allDays).forEach(function(day) { saveLocal(day, allDays[day]); });
+          setSyncStatus('on', 'Synced');
+        } catch(e) { setSyncStatus('on', 'Ready'); }
+      } else { setSyncStatus('err', 'Load error'); }
+    } else { setSyncStatus('on', 'Ready'); }
+  } catch(err) { setSyncStatus('err', 'Offline'); }
   renderPlanner();
 }
 
+function saveGhToken() {
+  var t = document.getElementById('gh-token-input').value.trim();
+  if (!t) return;
+  GITHUB_TOKEN = t;
+  lss('bulldogs_gh_token', t);
+  document.getElementById('sync-setup-panel').style.display = 'none';
+  document.getElementById('sync-connected-panel').style.display = 'block';
+  setSyncStatus('on', 'Synced');
+  loadFromJsonBin(currentDate);
+}
+function disconnectGhToken() {
+  GITHUB_TOKEN = '';
+  lsr('bulldogs_gh_token');
+  lsr('bulldogs_gist_id');
+  document.getElementById('sync-setup-panel').style.display = 'block';
+  document.getElementById('sync-connected-panel').style.display = 'none';
+  setSyncStatus('', 'Not synced');
+}
+function initSyncUI() {
+  if (GITHUB_TOKEN) {
+    document.getElementById('sync-setup-panel').style.display = 'none';
+    document.getElementById('sync-connected-panel').style.display = 'block';
+    setSyncStatus('on', 'Synced');
+  } else {
+    setSyncStatus('', 'Not synced — tap Sync tab to connect');
+  }
+}
 function saveSync() {}
 function disconnectSync() {}
 function copySync() {}
@@ -1638,6 +1660,7 @@ document.getElementById('travel-date').value = todayStr();
 document.getElementById('comms-date').value = todayStr();
 updatePlannerBadge();
 setSyncStatus('on', 'Sync active');
+initSyncUI();
 loadDay();
 </script>
 </body>
