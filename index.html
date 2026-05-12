@@ -1515,8 +1515,24 @@ function schedulePush(d, arr) {
   syncT = setTimeout(function() { pushToGist(d, arr); }, 800);
 }
 
+// In-memory cache of all days — avoids read-before-write on push
+var gistCache = null;
+
+function getAllLocalDays() {
+  var days = {};
+  for (var i = 0; i < localStorage.length; i++) {
+    var k = localStorage.key(i);
+    if (k && k.startsWith('bdog_tasks_')) {
+      var day = k.replace('bdog_tasks_', '');
+      try { days[day] = JSON.parse(localStorage.getItem(k)); } catch(e) {}
+    }
+  }
+  return days;
+}
+
 async function pushToGist(d, arr) {
-  setSyncStatus('pulse', 'Syncing…');
+  if (!GITHUB_TOKEN) return;
+  setSyncStatus('pulse', 'Syncing\u2026');
   try {
     var gistId = getGistId();
     var headers = {
@@ -1524,20 +1540,17 @@ async function pushToGist(d, arr) {
       'Authorization': 'token ' + GITHUB_TOKEN,
       'Accept': 'application/vnd.github.v3+json'
     };
-    var current = {};
-    if (gistId) {
-      var getRes = await fetch(GIST_API + '/' + gistId, { headers: headers });
-      if (getRes.ok) {
-        var gistData = await getRes.json();
-        try { current = JSON.parse(gistData.files['bulldogs-planner.json'].content); } catch(e) {}
-      }
-    }
-    current[d] = arr;
+
+    // Use cache if available, otherwise build from local storage
+    if (!gistCache) gistCache = getAllLocalDays();
+    gistCache[d] = arr;
+
     var body = {
       description: 'Bulldogs Planner Data',
       public: false,
-      files: { 'bulldogs-planner.json': { content: JSON.stringify(current) } }
+      files: { 'bulldogs-planner.json': { content: JSON.stringify(gistCache) } }
     };
+
     var res;
     if (gistId) {
       res = await fetch(GIST_API + '/' + gistId, { method: 'PATCH', headers: headers, body: JSON.stringify(body) });
@@ -1545,15 +1558,21 @@ async function pushToGist(d, arr) {
       res = await fetch(GIST_API, { method: 'POST', headers: headers, body: JSON.stringify(body) });
       if (res.ok) { var j = await res.json(); setGistId(j.id); }
     }
-    setSyncStatus(res.ok ? 'on' : 'err', res.ok ? 'Synced' : 'Sync error');
+    setSyncStatus(res && res.ok ? 'on' : 'err', res && res.ok ? 'Synced' : 'Sync error');
   } catch(err) { setSyncStatus('err', 'Offline'); }
 }
 
 async function loadFromJsonBin(d) {
-  setSyncStatus('pulse', 'Loading…');
+  // Show local data immediately so UI feels instant
+  renderPlanner();
+
+  if (!GITHUB_TOKEN) { setSyncStatus('', 'Not synced'); return; }
+  setSyncStatus('pulse', 'Syncing\u2026');
+
   try {
     var gistId = getGistId();
     var headers = { 'Authorization': 'token ' + GITHUB_TOKEN, 'Accept': 'application/vnd.github.v3+json' };
+
     if (!gistId) {
       var listRes = await fetch(GIST_API + '?per_page=100', { headers: headers });
       if (listRes.ok) {
@@ -1565,19 +1584,24 @@ async function loadFromJsonBin(d) {
         }
       }
     }
+
     if (gistId) {
       var res = await fetch(GIST_API + '/' + gistId, { headers: headers });
       if (res.ok) {
         var gistData = await res.json();
         try {
           var allDays = JSON.parse(gistData.files['bulldogs-planner.json'].content);
+          // Update cache
+          gistCache = allDays;
+          // Save all days to local storage
           Object.keys(allDays).forEach(function(day) { saveLocal(day, allDays[day]); });
           setSyncStatus('on', 'Synced');
+          // Only re-render if data changed for current day
+          renderPlanner();
         } catch(e) { setSyncStatus('on', 'Ready'); }
       } else { setSyncStatus('err', 'Load error'); }
     } else { setSyncStatus('on', 'Ready'); }
   } catch(err) { setSyncStatus('err', 'Offline'); }
-  renderPlanner();
 }
 
 function saveGhToken() {
