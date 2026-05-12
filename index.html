@@ -934,10 +934,10 @@ function rolloverIncomplete() {
 function loadDay() {
   var d = currentDate;
   document.getElementById('p-date-label').textContent = fmtDate(d);
-  document.getElementById('header-date').textContent = fmtDate(d);
+  var hd = document.getElementById('header-date');
+  if (hd) hd.textContent = fmtDate(d);
   checkRollover();
   renderPlanner();
-  // No network call here - Gist is loaded once at startup and on tab focus
 }
 
 function updatePlannerBadge() {
