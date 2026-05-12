@@ -932,14 +932,12 @@ function rolloverIncomplete() {
 }
 
 function loadDay() {
-  // Always ensure we're showing the right date
-  document.getElementById('p-date-label').textContent = fmtDate(currentDate);
-  document.getElementById('header-date').textContent = fmtDate(currentDate);
+  var d = currentDate;
+  document.getElementById('p-date-label').textContent = fmtDate(d);
+  document.getElementById('header-date').textContent = fmtDate(d);
   checkRollover();
-  // Render local data immediately so screen isn't blank
   renderPlanner();
-  // Then pull latest from Gist in background
-  if (GITHUB_TOKEN) loadFromJsonBin(currentDate);
+  if (GITHUB_TOKEN) loadFromJsonBin(d);
 }
 
 function updatePlannerBadge() {
@@ -1574,8 +1572,13 @@ async function pushToGist(d, arr) {
   } catch(err) { setSyncStatus('err', 'Offline'); }
 }
 
+var loadRequestId = 0;
+
 async function loadFromJsonBin(d) {
-  // Show local data immediately so UI feels instant
+  // Increment request ID — any older requests that complete will be ignored
+  var thisRequest = ++loadRequestId;
+
+  // Show local data immediately
   renderPlanner();
 
   if (!GITHUB_TOKEN) { setSyncStatus('', 'Not synced'); return; }
@@ -1599,19 +1602,19 @@ async function loadFromJsonBin(d) {
 
     if (gistId) {
       var res = await fetch(GIST_API + '/' + gistId, { headers: headers });
+      // Ignore if a newer request has started
+      if (thisRequest !== loadRequestId) return;
       if (res.ok) {
         var gistData = await res.json();
         try {
           var allDays = JSON.parse(gistData.files['bulldogs-planner.json'].content);
-          // Update cache
           gistCache = allDays;
-          // Save all days to local storage
           Object.keys(allDays).forEach(function(day) { saveLocal(day, allDays[day]); });
           setSyncStatus('on', 'Synced');
-          // Only re-render if data changed for current day
-          renderPlanner();
+          // Only re-render if this is still the current day being viewed
+          if (thisRequest === loadRequestId) renderPlanner();
         } catch(e) { setSyncStatus('on', 'Ready'); }
-      } else { setSyncStatus('err', 'Load error'); }
+      } else { setSyncStatus('err', 'Load error ' + res.status); }
     } else { setSyncStatus('on', 'Ready'); }
   } catch(err) { setSyncStatus('err', 'Offline'); }
 }
