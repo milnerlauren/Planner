@@ -1693,6 +1693,13 @@ document.addEventListener('visibilitychange', function() {
     loadFromJsonBin(currentDate);
   }
 });
+
+// Background poll every 30 seconds to stay in sync
+setInterval(function() {
+  if (GITHUB_TOKEN && !document.hidden) {
+    loadFromJsonBin(currentDate);
+  }
+}, 30000);
 </script>
 </body>
 </html>
