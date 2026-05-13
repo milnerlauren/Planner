@@ -630,11 +630,15 @@ textarea { resize: none; line-height: 1.5; }
         <p style="font-size:12px;color:var(--text3);line-height:1.6">Your token is stored only in this browser and never uploaded anywhere except GitHub's own servers.</p>
       </div>
       <div id="sync-connected-panel" style="display:none">
-        <div style="background:#e8f5e9;border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;color:#2e7d32;margin-bottom:12px">
-          <svg class="ico" viewBox="0 0 24 24" style="vertical-align:-3px;margin-right:4px"><path d="M5 12l5 5L20 7"/></svg>
-          Connected — syncing across all devices automatically.
+        <div style="background:#e8f5e9;border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;color:#2e7d32;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <svg class="ico" viewBox="0 0 24 24" style="vertical-align:-3px;flex-shrink:0"><path d="M5 12l5 5L20 7"/></svg>
+          <span style="flex:1">Connected — syncing across all devices.</span>
+          <span id="last-synced-label" style="font-size:11px;color:#555"></span>
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="disconnectGhToken()">Disconnect</button>
+        <div class="row">
+          <button class="btn btn-primary btn-sm" onclick="forceFullSync()"><svg class="ico" viewBox="0 0 24 24"><path d="M20 11A8 8 0 104.5 6.5M4 2v5h5"/></svg> Force sync now</button>
+          <button class="btn btn-ghost btn-sm" onclick="disconnectGhToken()">Disconnect</button>
+        </div>
       </div>
     </div>
 
@@ -1532,6 +1536,20 @@ function setSyncStatus(state, text) {
   if (dot) dot.className = 'sync-dot'+(state==='on'?' on':state==='pulse'?' pulse':state==='err'?' err':'');
   const lbl = document.getElementById('sync-label');
   if (lbl && text) lbl.textContent = text;
+  if (state === 'on') {
+    var now = new Date();
+    var timeStr = now.getHours()+':'+String(now.getMinutes()).padStart(2,'0')+':'+String(now.getSeconds()).padStart(2,'0');
+    var tslbl = document.getElementById('last-synced-label');
+    if (tslbl) tslbl.textContent = 'Last synced ' + timeStr;
+  }
+}
+
+async function forceFullSync() {
+  setSyncStatus('pulse', 'Syncing\u2026');
+  await pushToGist(currentDate, getLocal(currentDate));
+  await loadFromJsonBin(currentDate);
+  renderPlanner();
+  renderStaff();
 }
 
 function getGistId() { return ls('bulldogs_gist_id'); }
