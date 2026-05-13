@@ -1545,11 +1545,51 @@ function setSyncStatus(state, text) {
 }
 
 async function forceFullSync() {
-  setSyncStatus('pulse', 'Syncing\u2026');
-  await pushToGist(currentDate, getLocal(currentDate));
-  await loadFromJsonBin(currentDate);
-  renderPlanner();
-  renderStaff();
+  if (!GITHUB_TOKEN) { alert('Please connect your token first in the Sync tab.'); return; }
+  setSyncStatus('pulse', 'Pushing all data\u2026');
+  try {
+    // Build complete payload from local storage
+    var allData = {
+      tasks: getAllLocalDays(),
+      staff: getStaff(),
+      travel: getTravelLog(),
+      comms: getCommsLog()
+    };
+    var headers = {
+      'Content-Type': 'application/json',
+      'Authorization': 'token ' + GITHUB_TOKEN,
+      'Accept': 'application/vnd.github.v3+json'
+    };
+    var body = JSON.stringify({
+      description: 'Bulldogs Planner Data',
+      public: false,
+      files: { 'bulldogs-planner.json': { content: JSON.stringify(allData) } }
+    });
+    var gistId = getGistId();
+    var res;
+    if (gistId) {
+      res = await fetch(GIST_API + '/' + gistId, { method: 'PATCH', headers: headers, body: body });
+      // If patch fails, create new
+      if (!res.ok) {
+        lsr('bulldogs_gist_id');
+        res = await fetch(GIST_API, { method: 'POST', headers: headers, body: body });
+        if (res.ok) { var j = await res.json(); setGistId(j.id); }
+      }
+    } else {
+      res = await fetch(GIST_API, { method: 'POST', headers: headers, body: body });
+      if (res.ok) { var j = await res.json(); setGistId(j.id); }
+    }
+    if (res && res.ok) {
+      setSyncStatus('on', 'Synced');
+      alert('All data pushed successfully!\nStaff: ' + allData.staff.length + ' members\nTask days: ' + Object.keys(allData.tasks).length);
+    } else {
+      setSyncStatus('err', 'Push failed');
+      alert('Push failed. Check your token is still valid.');
+    }
+  } catch(err) {
+    setSyncStatus('err', 'Offline');
+    alert('Could not reach GitHub. Check your internet connection.');
+  }
 }
 
 function getGistId() { return ls('bulldogs_gist_id'); }
