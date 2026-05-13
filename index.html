@@ -1576,13 +1576,15 @@ function getAllLocalDays() {
 }
 
 function buildFullPayload(d, arr) {
-  // Build a complete snapshot of everything for the Gist
-  if (!gistCache) gistCache = { tasks: getAllLocalDays(), staff: [], travel: [], comms: [] };
-  gistCache.tasks[d] = arr;
-  gistCache.staff = getStaff();
-  gistCache.travel = getTravelLog();
-  gistCache.comms = getCommsLog();
-  return gistCache;
+  // Always read fresh from local storage — never use empty fallbacks
+  var tasks = getAllLocalDays();
+  tasks[d] = arr;
+  return {
+    tasks: tasks,
+    staff: getStaff(),
+    travel: getTravelLog(),
+    comms: getCommsLog()
+  };
 }
 
 async function pushToGist(d, arr) {
@@ -1606,10 +1608,13 @@ async function pushToGist(d, arr) {
       res = await fetch(GIST_API + '/' + gistId, { method: 'PATCH', headers: headers, body: JSON.stringify(body) });
     } else {
       res = await fetch(GIST_API, { method: 'POST', headers: headers, body: JSON.stringify(body) });
-      if (res.ok) { var j = await res.json(); setGistId(j.id); }
+      if (res && res.ok) { var j = await res.json(); setGistId(j.id); }
     }
-    setSyncStatus(res && res.ok ? 'on' : 'err', res && res.ok ? 'Synced' : 'Sync error');
-  } catch(err) { setSyncStatus('err', 'Offline'); }
+    setSyncStatus(res && res.ok ? 'on' : 'err', res && res.ok ? 'Synced' : 'Sync error — saved locally');
+  } catch(err) {
+    // Network failure — task is already saved locally, just show error
+    setSyncStatus('err', 'Offline — saved locally');
+  }
 }
 
 // Call this after any staff/travel/comms change to push to Gist
@@ -1647,15 +1652,17 @@ async function loadFromJsonBin(d) {
         var gistData = await res.json();
         var allData = JSON.parse(gistData.files['bulldogs-planner.json'].content);
         gistCache = allData;
-        // Restore tasks
-        var taskDays = allData.tasks || allData; // handle old format
+        // Restore tasks — but don't overwrite current day if a push is pending
+        var taskDays = allData.tasks || allData;
         Object.keys(taskDays).forEach(function(day) {
+          // Skip current day if there's a pending push (syncT is set)
+          if (day === currentDate && syncT !== null) return;
           if (Array.isArray(taskDays[day])) saveLocal(day, taskDays[day]);
         });
-        // Restore staff, travel, comms if present
-        if (allData.staff) saveStaffData(allData.staff);
-        if (allData.travel) saveTravelLog(allData.travel);
-        if (allData.comms) saveCommsLog(allData.comms);
+        // Always restore staff, travel, comms
+        if (allData.staff && allData.staff.length > 0) saveStaffData(allData.staff);
+        if (allData.travel && allData.travel.length > 0) saveTravelLog(allData.travel);
+        if (allData.comms && allData.comms.length > 0) saveCommsLog(allData.comms);
         setSyncStatus('on', 'Synced');
       } else { setSyncStatus('err', 'Error ' + res.status); }
     } else { setSyncStatus('on', 'Ready'); }
